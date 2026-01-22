@@ -322,6 +322,7 @@ fun reduce(old: UiState, event: UiEvent): UiState {
 
 ✔ Easy unit tests
 
-###⭐ Final Interview Takeaway
+### ⭐ Final Interview Takeaway
 
 Great Jetpack Compose developers don’t just write UI — they design APIs.
+
