@@ -1,0 +1,3124 @@
+# 🤖 Kotlin Coroutines in Android Development
+### The Complete Step-by-Step Guide with Working Examples
+
+> Covers every topic you need — from setup to production-ready patterns used in real Android apps.
+
+---
+
+## 📋 Table of Contents
+
+1. [What Are Coroutines & Why Android Needs Them](#1-what-are-coroutines--why-android-needs-them)
+2. [Setup & Gradle Dependencies](#2-setup--gradle-dependencies)
+3. [Core Coroutine Concepts](#3-core-coroutine-concepts)
+4. [Coroutine Builders](#4-coroutine-builders)
+5. [suspend Functions](#5-suspend-functions)
+6. [Coroutine Scopes in Android](#6-coroutine-scopes-in-android)
+7. [Dispatchers](#7-dispatchers)
+8. [Job & Deferred](#8-job--deferred)
+9. [Structured Concurrency](#9-structured-concurrency)
+10. [Cancellation & Timeouts](#10-cancellation--timeouts)
+11. [Exception Handling](#11-exception-handling)
+12. [Coroutines with ViewModel](#12-coroutines-with-viewmodel)
+13. [Coroutines with LiveData](#13-coroutines-with-livedata)
+14. [Kotlin Flow](#14-kotlin-flow)
+15. [StateFlow & SharedFlow](#15-stateflow--sharedflow)
+16. [Coroutines with Room Database](#16-coroutines-with-room-database)
+17. [Coroutines with Retrofit (Network)](#17-coroutines-with-retrofit-network)
+18. [Coroutines with WorkManager](#18-coroutines-with-workmanager)
+19. [Channels](#19-channels)
+20. [Coroutine Context & CoroutineScope](#20-coroutine-context--coroutinescope)
+21. [withContext — Thread Switching](#21-withcontext--thread-switching)
+22. [Parallel Decomposition](#22-parallel-decomposition)
+23. [Coroutines in Fragments & Activities](#23-coroutines-in-fragments--activities)
+24. [Coroutines with Dependency Injection (Hilt)](#24-coroutines-with-dependency-injection-hilt)
+25. [Repository Pattern with Coroutines](#25-repository-pattern-with-coroutines)
+26. [Unit Testing Coroutines](#26-unit-testing-coroutines)
+27. [Common Anti-Patterns & Pitfalls](#27-common-anti-patterns--pitfalls)
+28. [Performance Best Practices](#28-performance-best-practices)
+29. [Complete Real-World Example App](#29-complete-real-world-example-app)
+30. [Quick Reference Cheat Sheet](#30-quick-reference-cheat-sheet)
+
+---
+
+## 1. What Are Coroutines & Why Android Needs Them
+
+Android apps run on the **Main Thread (UI Thread)**. Any long-running operation (network, database, file I/O) on the main thread causes **ANR (Application Not Responding)** errors.
+
+### The Problem (Without Coroutines)
+
+```kotlin
+// ❌ BAD — blocks the Main Thread — causes ANR!
+fun loadUserFromNetwork(): User {
+    Thread.sleep(3000) // Simulates network call — freezes the UI!
+    return User("John")
+}
+```
+
+### The Traditional Fix (Messy)
+
+```kotlin
+// ❌ BAD — callback hell
+fun loadUser(callback: (User) -> Unit) {
+    Thread {
+        val user = fetchFromServer() // blocking call on background thread
+        runOnUiThread {
+            callback(user) // back to main thread
+        }
+    }.start()
+}
+```
+
+### The Coroutine Fix (Clean & Readable)
+
+```kotlin
+// ✅ GOOD — non-blocking, reads like synchronous code
+fun loadUser() {
+    viewModelScope.launch {
+        val user = withContext(Dispatchers.IO) {
+            fetchFromServer() // runs on background thread
+        }
+        updateUI(user) // automatically back on Main thread
+    }
+}
+```
+
+### Why Coroutines?
+
+| Feature | Threads | Coroutines |
+|---|---|---|
+| Memory per unit | ~1 MB | ~100 bytes |
+| Creation time | ~1 ms | ~1 µs |
+| Code readability | Poor (callbacks) | Excellent (sequential) |
+| Error handling | Complex | Natural try/catch |
+| Cancellation | Manual | Built-in |
+| Lifecycle-aware | No | Yes (via Scopes) |
+| Max concurrent | ~1,000 | ~100,000+ |
+
+---
+
+## 2. Setup & Gradle Dependencies
+
+### Step 1 — Add dependencies to `build.gradle (app)`
+
+```kotlin
+// build.gradle.kts (App level)
+dependencies {
+
+    // Core Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+
+    // ViewModel + Lifecycle (includes viewModelScope)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.7.0")
+
+    // Room (with coroutine support)
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
+
+    // Retrofit (with coroutine support)
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+
+    // WorkManager (with coroutine support)
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // Testing
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
+}
+```
+
+### Step 2 — Enable Kotlin in `build.gradle (app)`
+
+```kotlin
+// build.gradle.kts
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("kotlin-kapt") // for Room annotation processing
+}
+
+android {
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+```
+
+---
+
+## 3. Core Coroutine Concepts
+
+### Key Terms at a Glance
+
+| Term | Meaning |
+|---|---|
+| `suspend` | Marks a function that can pause without blocking a thread |
+| `CoroutineScope` | Defines the lifetime/boundary of coroutines |
+| `CoroutineContext` | Carries metadata: Dispatcher + Job + Name |
+| `Dispatcher` | Determines which thread the coroutine runs on |
+| `Job` | Handle to a running coroutine; can cancel it |
+| `launch` | Starts a coroutine and returns a `Job` |
+| `async` | Starts a coroutine and returns a `Deferred<T>` (a future result) |
+| `await()` | Suspends until `Deferred` has a result |
+| `Flow` | A cold asynchronous stream of values |
+| `StateFlow` | A hot flow that always holds the latest value (for UI state) |
+| `Channel` | Hot communication pipe between coroutines |
+
+### The Coroutine = Lightweight Thread Analogy
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    // Launch 100,000 coroutines — no OutOfMemoryError!
+    repeat(100_000) {
+        launch {
+            delay(1000L)
+            print(".")
+        }
+    }
+}
+// Doing this with real threads would crash the app
+```
+
+---
+
+## 4. Coroutine Builders
+
+Coroutine builders are functions that **start a new coroutine**.
+
+### 4.1 `launch` — Fire and Forget
+
+```kotlin
+import kotlinx.coroutines.*
+
+class MainActivity : AppCompatActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // launch returns a Job (no result value)
+        val job = lifecycleScope.launch {
+            delay(1000L)
+            Log.d("Coroutine", "Hello from coroutine!")
+        }
+
+        // You can cancel it
+        // job.cancel()
+    }
+}
+```
+
+### 4.2 `async` — Returns a Result
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // async returns Deferred<String>
+    val deferred = async {
+        delay(1000L)
+        "Hello from async!"
+    }
+
+    // await() suspends until the result is ready
+    val result: String = deferred.await()
+    println(result) // Hello from async!
+}
+```
+
+### 4.3 `runBlocking` — Blocks Current Thread (Testing Only)
+
+```kotlin
+import kotlinx.coroutines.*
+
+// Use ONLY for main() functions or unit tests
+// NEVER use in Android production code (blocks UI thread)
+fun main() = runBlocking {
+    println("Start")
+    delay(1000L)
+    println("End")
+}
+```
+
+### 4.4 `withContext` — Switch Dispatcher, Return Result
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun fetchUserName(): String {
+    // Switch to IO thread, do work, return result
+    return withContext(Dispatchers.IO) {
+        delay(500L) // Simulate network
+        "John Doe"
+    }
+    // Automatically returns to original dispatcher after the block
+}
+
+fun main() = runBlocking {
+    val name = fetchUserName()
+    println(name) // John Doe
+}
+```
+
+### 4.5 `coroutineScope` — Child Scope Builder
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun loadDashboard() = coroutineScope {
+    // Creates a child scope
+    // Suspends until ALL children complete
+    val users  = async { fetchUsers() }
+    val orders = async { fetchOrders() }
+
+    // Both run in parallel
+    println("Users: ${users.await()}, Orders: ${orders.await()}")
+}
+
+suspend fun fetchUsers()  = "UserList"
+suspend fun fetchOrders() = "OrderList"
+```
+
+### 4.6 `supervisorScope` — Isolated Child Failures
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun robustLoad() = supervisorScope {
+    val job1 = launch {
+        delay(100)
+        throw RuntimeException("Job 1 failed!")
+        // Failure does NOT cancel siblings
+    }
+
+    val job2 = launch {
+        delay(200)
+        println("Job 2 completed successfully") // Still runs!
+    }
+
+    job1.join()
+    job2.join()
+}
+```
+
+---
+
+## 5. suspend Functions
+
+### What is a `suspend` Function?
+
+A `suspend` function can **pause execution** and **resume later** without blocking the thread. It can only be called from another `suspend` function or a coroutine builder.
+
+```kotlin
+// suspend keyword marks this function as pauseable
+suspend fun fetchData(): String {
+    delay(1000L) // Non-blocking pause
+    return "Data loaded"
+}
+
+// Can only call fetchData() from:
+// 1. Another suspend function
+// 2. A coroutine builder (launch, async, etc.)
+suspend fun processData() {
+    val data = fetchData() // ✅ OK — inside suspend function
+    println(data)
+}
+
+fun regularFunction() {
+    // fetchData() // ❌ ERROR — cannot call suspend from regular function
+    lifecycleScope.launch {
+        fetchData() // ✅ OK — inside coroutine
+    }
+}
+```
+
+### Step-by-Step: Creating a suspend Function
+
+```kotlin
+// Step 1: Add the suspend modifier
+suspend fun getUserFromDb(id: Int): User {
+
+    // Step 2: Use withContext to switch to the right thread
+    return withContext(Dispatchers.IO) {
+
+        // Step 3: Do your blocking work here
+        val cursor = database.query("SELECT * FROM users WHERE id = $id")
+        cursor.use {
+            User(
+                id   = it.getInt(0),
+                name = it.getString(1)
+            )
+        }
+    }
+}
+```
+
+### Suspend Function with Callback Conversion
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlin.coroutines.*
+
+// Old callback-based API
+interface LocationCallback {
+    fun onLocationReceived(lat: Double, lng: Double)
+    fun onError(error: String)
+}
+
+// Convert to suspend using suspendCoroutine
+suspend fun getCurrentLocation(): Pair<Double, Double> {
+    return suspendCoroutine { continuation ->
+        locationManager.getLocation(object : LocationCallback {
+            override fun onLocationReceived(lat: Double, lng: Double) {
+                continuation.resume(Pair(lat, lng)) // Resume with result
+            }
+            override fun onError(error: String) {
+                continuation.resumeWithException(Exception(error)) // Resume with error
+            }
+        })
+    }
+}
+
+// Usage
+suspend fun showLocation() {
+    try {
+        val (lat, lng) = getCurrentLocation()
+        println("Location: $lat, $lng")
+    } catch (e: Exception) {
+        println("Error: ${e.message}")
+    }
+}
+```
+
+### suspendCancellableCoroutine (Preferred for Cancellation)
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun fetchImage(url: String): Bitmap {
+    return suspendCancellableCoroutine { continuation ->
+        val call = imageLoader.load(url) { bitmap ->
+            continuation.resume(bitmap)
+        }
+
+        // Called when the coroutine is cancelled
+        continuation.invokeOnCancellation {
+            call.cancel() // Clean up the underlying operation
+        }
+    }
+}
+```
+
+---
+
+## 6. Coroutine Scopes in Android
+
+A **CoroutineScope** defines the **lifetime** of coroutines. When the scope is cancelled, all coroutines inside it are cancelled too.
+
+### 6.1 `viewModelScope` — For ViewModels ✅ Recommended
+
+```kotlin
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.*
+
+class UserViewModel : ViewModel() {
+
+    fun loadUser(id: Int) {
+        // Automatically cancelled when ViewModel is cleared
+        viewModelScope.launch {
+            try {
+                val user = withContext(Dispatchers.IO) {
+                    userRepository.getUser(id)
+                }
+                _user.value = user
+            } catch (e: Exception) {
+                _error.value = e.message
+            }
+        }
+    }
+
+    // viewModelScope is automatically cancelled in onCleared()
+    override fun onCleared() {
+        super.onCleared()
+        // No manual cleanup needed!
+    }
+}
+```
+
+### 6.2 `lifecycleScope` — For Activities & Fragments ✅ Recommended
+
+```kotlin
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.*
+
+class MainActivity : AppCompatActivity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Cancelled when Activity is DESTROYED
+        lifecycleScope.launch {
+            val data = fetchData()
+            textView.text = data
+        }
+    }
+}
+
+class UserFragment : Fragment() {
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        // Cancelled when Fragment's VIEW is DESTROYED
+        viewLifecycleOwner.lifecycleScope.launch {
+            val data = fetchData()
+            binding.textView.text = data
+        }
+    }
+}
+```
+
+### 6.3 `repeatOnLifecycle` — Lifecycle-Safe Collection
+
+```kotlin
+class UserFragment : Fragment() {
+
+    private val viewModel: UserViewModel by viewModels()
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        // BEST PRACTICE for collecting Flow in Fragments/Activities
+        viewLifecycleOwner.lifecycleScope.launch {
+            // Starts when STARTED, stops when STOPPED, restarts when STARTED again
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collect { state ->
+                    renderUi(state)
+                }
+            }
+        }
+    }
+}
+```
+
+### 6.4 Custom CoroutineScope — For Services
+
+```kotlin
+import kotlinx.coroutines.*
+
+class MyForegroundService : Service() {
+
+    // Create a custom scope tied to the service lifecycle
+    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        serviceScope.launch {
+            doLongRunningWork()
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceScope.cancel() // Cancel all coroutines when service is destroyed
+    }
+}
+```
+
+### Scope Lifecycle Summary
+
+| Scope | Cancelled When | Use For |
+|---|---|---|
+| `viewModelScope` | `ViewModel.onCleared()` | Data loading, business logic |
+| `lifecycleScope` | `Activity/Fragment.onDestroy()` | UI operations |
+| `viewLifecycleOwner.lifecycleScope` | Fragment view destroyed | Fragment UI updates |
+| Custom scope | You call `.cancel()` | Services, custom classes |
+| `GlobalScope` | App process ends | ⚠️ Avoid — causes leaks |
+
+---
+
+## 7. Dispatchers
+
+Dispatchers determine **which thread or thread pool** a coroutine runs on.
+
+### Available Dispatchers
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // Dispatchers.Main — Android UI thread
+    launch(Dispatchers.Main) {
+        // ✅ Safe to update Views here
+        textView.text = "Hello"
+    }
+
+    // Dispatchers.IO — Optimized for I/O (network, files, DB)
+    // Thread pool size: max(64, numberOfCores)
+    launch(Dispatchers.IO) {
+        val data = File("data.txt").readText() // blocking I/O
+        println("File content: $data")
+    }
+
+    // Dispatchers.Default — Optimized for CPU-intensive work
+    // Thread pool size: numberOfCores (min 2)
+    launch(Dispatchers.Default) {
+        val result = (1..1_000_000).sum() // heavy computation
+        println("Sum: $result")
+    }
+
+    // Dispatchers.Unconfined — Runs in caller's thread until first suspension
+    // (Rarely used in Android)
+    launch(Dispatchers.Unconfined) {
+        println("Thread: ${Thread.currentThread().name}")
+        delay(100)
+        println("Thread after delay: ${Thread.currentThread().name}") // May be different!
+    }
+}
+```
+
+### Choosing the Right Dispatcher
+
+```kotlin
+class DataRepository(
+    private val api: ApiService,
+    private val dao: UserDao,
+    private val context: Context
+) {
+
+    // Network call → Dispatchers.IO
+    suspend fun fetchUserFromApi(id: Int): User = withContext(Dispatchers.IO) {
+        api.getUser(id)
+    }
+
+    // Database call → Dispatchers.IO
+    suspend fun getUserFromDb(id: Int): User = withContext(Dispatchers.IO) {
+        dao.getUser(id)
+    }
+
+    // JSON parsing / Sorting → Dispatchers.Default
+    suspend fun parseUsers(json: String): List<User> = withContext(Dispatchers.Default) {
+        Gson().fromJson(json, Array<User>::class.java).toList()
+    }
+
+    // File read/write → Dispatchers.IO
+    suspend fun saveToFile(data: String) = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, "cache.txt")
+        file.writeText(data)
+    }
+}
+```
+
+### Custom Dispatcher (Thread Pool)
+
+```kotlin
+import kotlinx.coroutines.*
+import java.util.concurrent.Executors
+
+// Create a custom thread pool dispatcher
+val customDispatcher = Executors.newFixedThreadPool(4).asCoroutineDispatcher()
+
+fun main() = runBlocking {
+    launch(customDispatcher) {
+        println("Running on custom thread pool")
+    }
+}
+
+// Don't forget to shut it down when done
+// customDispatcher.close()
+```
+
+---
+
+## 8. Job & Deferred
+
+### Job — Coroutine Handle
+
+A `Job` is a handle to a running coroutine. You can use it to monitor state, wait for completion, or cancel it.
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        repeat(5) { i ->
+            delay(500L)
+            println("Working... step $i")
+        }
+    }
+
+    // Job states
+    println("isActive:    ${job.isActive}")    // true
+    println("isCompleted: ${job.isCompleted}") // false
+    println("isCancelled: ${job.isCancelled}") // false
+
+    delay(1200L)
+    job.cancel()  // Cancel after 1.2 seconds (runs steps 0, 1, 2)
+    job.join()    // Wait for cancellation to complete
+
+    println("isActive:    ${job.isActive}")    // false
+    println("isCompleted: ${job.isCompleted}") // false
+    println("isCancelled: ${job.isCancelled}") // true
+}
+```
+
+### Deferred — Job with a Result
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    val deferred: Deferred<Int> = async {
+        delay(1000L)
+        42 // The result
+    }
+
+    println("Waiting for result...")
+    val result = deferred.await() // Suspends until ready
+    println("Result: $result")   // Result: 42
+
+    // You can also cancel a Deferred
+    val cancelledDeferred = async {
+        delay(5000L)
+        "never"
+    }
+    cancelledDeferred.cancel()
+    try {
+        cancelledDeferred.await()
+    } catch (e: CancellationException) {
+        println("Deferred was cancelled")
+    }
+}
+```
+
+### SupervisorJob — Isolate Child Failures
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // Without SupervisorJob — one child fails = all siblings cancelled
+    val regularJob = Job()
+    val regularScope = CoroutineScope(regularJob)
+
+    // With SupervisorJob — one child fails = siblings continue
+    val supervisorJob = SupervisorJob()
+    val supervisorScope = CoroutineScope(supervisorJob)
+
+    supervisorScope.launch {
+        delay(100)
+        throw RuntimeException("Child 1 failed!")
+    }
+
+    supervisorScope.launch {
+        delay(300)
+        println("Child 2 still running!") // ✅ Still executes
+    }
+
+    delay(500)
+    supervisorScope.cancel()
+}
+```
+
+---
+
+## 9. Structured Concurrency
+
+Structured concurrency is the principle that **coroutines must be launched in a scope**, and a scope waits for all its children before completing.
+
+```
+Parent Scope
+├── Child Coroutine 1
+├── Child Coroutine 2
+│   ├── Grandchild Coroutine A
+│   └── Grandchild Coroutine B
+└── Child Coroutine 3
+```
+
+**Rules:**
+- Parent waits for ALL children to complete
+- If parent is cancelled → ALL children are cancelled
+- If a child fails → parent is notified (and may cancel siblings)
+
+### Example: Structured Concurrency in Action
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    println("Parent starts")
+
+    launch { // Child 1
+        delay(1000)
+        println("Child 1 done")
+    }
+
+    launch { // Child 2
+        delay(500)
+        println("Child 2 done")
+
+        launch { // Grandchild
+            delay(700)
+            println("Grandchild done")
+        }
+    }
+
+    // Parent doesn't print "Parent done" until ALL children + grandchildren finish
+    println("Parent done")
+}
+
+// Output:
+// Parent starts
+// Child 2 done
+// Child 1 done
+// Grandchild done
+// Parent done  ← last, because runBlocking waits
+```
+
+### Structured Cancellation
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val parent = launch {
+        val child1 = launch {
+            repeat(10) { i ->
+                println("Child 1: step $i")
+                delay(200)
+            }
+        }
+        val child2 = launch {
+            repeat(10) { i ->
+                println("Child 2: step $i")
+                delay(300)
+            }
+        }
+
+        delay(700)
+        println("Parent cancelling itself...")
+        cancel() // Cancels parent AND both children
+    }
+
+    parent.join()
+    println("All done — both children cancelled with parent")
+}
+```
+
+---
+
+## 10. Cancellation & Timeouts
+
+### 10.1 Cancellation Basics
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        repeat(10) { i ->
+            // delay() is a cancellation checkpoint
+            delay(300)
+            println("Step $i")
+        }
+    }
+
+    delay(1000)
+    println("Cancelling...")
+    job.cancelAndJoin() // cancel + wait
+    println("Cancelled!")
+}
+```
+
+### 10.2 Making Custom Code Cancellable
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch(Dispatchers.Default) {
+        // CPU-intensive loop — need manual cancellation checks
+        var count = 0
+        while (isActive) { // isActive = false when cancelled
+            count++
+            // Process item...
+        }
+        println("Loop ended. Processed $count items")
+    }
+
+    delay(1000)
+    job.cancelAndJoin()
+}
+```
+
+### 10.3 Using `yield()` for Cancellation Points
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun heavyComputation() {
+    repeat(1000) { i ->
+        // Do heavy work...
+        val result = i * i
+
+        // yield() checks for cancellation AND lets other coroutines run
+        yield()
+    }
+}
+```
+
+### 10.4 Handling `CancellationException`
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        try {
+            delay(Long.MAX_VALUE)
+        } catch (e: CancellationException) {
+            println("Coroutine cancelled — cleaning up resources")
+            // Do cleanup (close files, DB connections, etc.)
+            throw e // ⚠️ ALWAYS re-throw CancellationException!
+        } finally {
+            // finally block always runs, even on cancellation
+            println("Finally block — always runs")
+        }
+    }
+
+    delay(500)
+    job.cancel()
+    job.join()
+}
+```
+
+### 10.5 `withTimeout`
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // Throws TimeoutCancellationException if exceeds limit
+    try {
+        val result = withTimeout(2000L) {
+            delay(3000L) // Takes longer than timeout
+            "Result"
+        }
+        println(result)
+    } catch (e: TimeoutCancellationException) {
+        println("Timed out!")
+    }
+
+    // Returns null on timeout instead of throwing
+    val result = withTimeoutOrNull(2000L) {
+        delay(3000L)
+        "Result"
+    }
+    println("Result: $result") // Result: null
+}
+```
+
+### 10.6 Non-Cancellable Block (for Cleanup)
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val job = launch {
+        try {
+            delay(Long.MAX_VALUE)
+        } finally {
+            // withContext(NonCancellable) ensures this runs even when cancelled
+            withContext(NonCancellable) {
+                println("Saving data before exit...")
+                delay(500L) // Can use suspend functions here
+                println("Data saved!")
+            }
+        }
+    }
+
+    delay(200)
+    job.cancelAndJoin()
+    println("Main completed")
+}
+```
+
+---
+
+## 11. Exception Handling
+
+### 11.1 try/catch in Coroutines
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    launch {
+        try {
+            val result = riskyOperation()
+            println("Success: $result")
+        } catch (e: HttpException) {
+            println("HTTP Error: ${e.code()}")
+        } catch (e: IOException) {
+            println("Network Error: ${e.message}")
+        } catch (e: Exception) {
+            println("Unknown Error: ${e.message}")
+        }
+    }
+}
+
+suspend fun riskyOperation(): String {
+    delay(100)
+    throw IOException("Connection refused")
+}
+```
+
+### 11.2 `CoroutineExceptionHandler`
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // Global exception handler for uncaught coroutine exceptions
+    val handler = CoroutineExceptionHandler { context, exception ->
+        println("Caught in handler: $exception")
+        // Log to Firebase Crashlytics etc.
+    }
+
+    // Handler must be attached to root coroutine scope
+    val scope = CoroutineScope(SupervisorJob() + handler)
+
+    scope.launch {
+        throw RuntimeException("Something went wrong!")
+    }
+
+    scope.launch {
+        delay(200)
+        println("This still runs") // SupervisorJob isolates the failure
+    }
+
+    delay(500)
+    scope.cancel()
+}
+```
+
+### 11.3 Exception Propagation: `launch` vs `async`
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // launch — exception thrown immediately (propagates to parent)
+    val launchJob = launch {
+        try {
+            throw RuntimeException("launch exception")
+        } catch (e: Exception) {
+            println("launch caught: ${e.message}")
+        }
+    }
+
+    // async — exception deferred until .await() is called
+    val asyncDeferred = async {
+        throw RuntimeException("async exception")
+        "never reached"
+    }
+
+    try {
+        asyncDeferred.await() // Exception thrown HERE
+    } catch (e: RuntimeException) {
+        println("async caught: ${e.message}")
+    }
+
+    launchJob.join()
+}
+```
+
+### 11.4 Result Wrapper Pattern (Recommended for Android)
+
+```kotlin
+import kotlinx.coroutines.*
+
+// Sealed class for safe result handling
+sealed class UiState<out T> {
+    object Loading : UiState<Nothing>()
+    data class Success<T>(val data: T) : UiState<T>()
+    data class Error(val message: String, val throwable: Throwable? = null) : UiState<Nothing>()
+}
+
+class UserViewModel(private val repo: UserRepository) : ViewModel() {
+
+    private val _uiState = MutableStateFlow<UiState<User>>(UiState.Loading)
+    val uiState: StateFlow<UiState<User>> = _uiState
+
+    fun loadUser(id: Int) {
+        viewModelScope.launch {
+            _uiState.value = UiState.Loading
+            _uiState.value = try {
+                val user = withContext(Dispatchers.IO) { repo.getUser(id) }
+                UiState.Success(user)
+            } catch (e: Exception) {
+                UiState.Error(e.message ?: "Unknown error", e)
+            }
+        }
+    }
+}
+```
+
+---
+
+## 12. Coroutines with ViewModel
+
+### Full ViewModel with Coroutines
+
+```kotlin
+import androidx.lifecycle.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+data class User(val id: Int, val name: String, val email: String)
+
+class UserViewModel(private val repository: UserRepository) : ViewModel() {
+
+    // Private mutable state
+    private val _users = MutableStateFlow<List<User>>(emptyList())
+    val users: StateFlow<List<User>> = _users.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _errorMessage = MutableSharedFlow<String>()
+    val errorMessage: SharedFlow<String> = _errorMessage.asSharedFlow()
+
+    // Triggered on init
+    init {
+        loadUsers()
+    }
+
+    fun loadUsers() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    repository.getAllUsers()
+                }
+                _users.value = result
+            } catch (e: Exception) {
+                _errorMessage.emit(e.message ?: "Failed to load users")
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun addUser(name: String, email: String) {
+        viewModelScope.launch {
+            try {
+                val newUser = withContext(Dispatchers.IO) {
+                    repository.createUser(name, email)
+                }
+                _users.value = _users.value + newUser
+            } catch (e: Exception) {
+                _errorMessage.emit(e.message ?: "Failed to add user")
+            }
+        }
+    }
+
+    fun deleteUser(userId: Int) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    repository.deleteUser(userId)
+                }
+                _users.value = _users.value.filter { it.id != userId }
+            } catch (e: Exception) {
+                _errorMessage.emit("Failed to delete user")
+            }
+        }
+    }
+}
+```
+
+### ViewModelFactory (for constructor injection)
+
+```kotlin
+class UserViewModelFactory(private val repository: UserRepository) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(UserViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return UserViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+
+// Usage in Activity/Fragment
+class UserActivity : AppCompatActivity() {
+    private val viewModel: UserViewModel by viewModels {
+        UserViewModelFactory(UserRepository(/* dependencies */))
+    }
+}
+```
+
+---
+
+## 13. Coroutines with LiveData
+
+### `liveData` Builder — LiveData + Coroutines
+
+```kotlin
+import androidx.lifecycle.*
+import kotlinx.coroutines.*
+
+class ProductViewModel(private val repo: ProductRepository) : ViewModel() {
+
+    // liveData builder: coroutine tied to LiveData's active state
+    val products: LiveData<List<Product>> = liveData {
+        emit(emptyList()) // Initial value
+        try {
+            val data = withContext(Dispatchers.IO) {
+                repo.getProducts()
+            }
+            emit(data)
+        } catch (e: Exception) {
+            // Handle error
+        }
+    }
+
+    // With loading state using Resource wrapper
+    val productResult: LiveData<Resource<List<Product>>> = liveData {
+        emit(Resource.Loading)
+        try {
+            val products = withContext(Dispatchers.IO) { repo.getProducts() }
+            emit(Resource.Success(products))
+        } catch (e: Exception) {
+            emit(Resource.Error(e.message ?: "Error"))
+        }
+    }
+}
+
+sealed class Resource<out T> {
+    object Loading : Resource<Nothing>()
+    data class Success<T>(val data: T) : Resource<T>()
+    data class Error(val message: String) : Resource<Nothing>()
+}
+```
+
+### Observing in Activity
+
+```kotlin
+class ProductActivity : AppCompatActivity() {
+
+    private val viewModel: ProductViewModel by viewModels()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        viewModel.productResult.observe(this) { resource ->
+            when (resource) {
+                is Resource.Loading  -> showProgressBar()
+                is Resource.Success  -> showProducts(resource.data)
+                is Resource.Error    -> showError(resource.message)
+            }
+        }
+    }
+}
+```
+
+---
+
+## 14. Kotlin Flow
+
+A **Flow** is a cold, asynchronous stream of data. It only runs when collected.
+
+### 14.1 Creating a Flow
+
+```kotlin
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.*
+
+// Simple flow
+val simpleFlow: Flow<Int> = flow {
+    println("Flow started")       // runs each time collected
+    emit(1)
+    delay(100)
+    emit(2)
+    delay(100)
+    emit(3)
+}
+
+// flowOf — from fixed values
+val fixedFlow: Flow<String> = flowOf("A", "B", "C")
+
+// asFlow — from Iterable
+val listFlow: Flow<Int> = listOf(1, 2, 3, 4, 5).asFlow()
+
+// channelFlow — for concurrent emissions
+val channelFlow = channelFlow {
+    send(1)
+    withContext(Dispatchers.IO) {
+        send(2) // can emit from different coroutines
+    }
+}
+```
+
+### 14.2 Flow Operators
+
+```kotlin
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    flow {
+        emit(1); emit(2); emit(3); emit(4); emit(5)
+    }
+    // Transformation operators
+    .map       { it * 2 }           // [2, 4, 6, 8, 10]
+    .filter    { it > 4 }           // [6, 8, 10]
+    .take      (2)                  // [6, 8]
+
+    // Side effects
+    .onEach    { println("Item: $it") }
+    .onStart   { println("Flow started") }
+    .onCompletion { println("Flow completed") }
+
+    // Collect the flow
+    .collect   { println("Collected: $it") }
+}
+```
+
+### 14.3 Terminal Operators
+
+```kotlin
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+    val numbers = (1..5).asFlow()
+
+    // collect — most common
+    numbers.collect { println(it) }
+
+    // collectLatest — cancels previous if new comes before it finishes
+    numbers.collectLatest { value ->
+        delay(100) // Slow processing
+        println("Collected latest: $value") // Only last value may be printed
+    }
+
+    // toList / toSet
+    val list = numbers.toList()  // [1, 2, 3, 4, 5]
+    val set  = numbers.toSet()   // {1, 2, 3, 4, 5}
+
+    // first / last
+    val first = numbers.first()  // 1
+    val last  = numbers.last()   // 5
+
+    // single
+    val single = flowOf(42).single() // 42 (throws if not exactly one)
+
+    // reduce / fold
+    val sum = numbers.reduce { acc, value -> acc + value }  // 15
+    val sum2 = numbers.fold(100) { acc, value -> acc + value } // 115
+}
+```
+
+### 14.4 Advanced Flow Operators
+
+```kotlin
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // flatMapConcat — sequential inner flows
+    (1..3).asFlow()
+        .flatMapConcat { value ->
+            flow { emit("$value-A"); emit("$value-B") }
+        }
+        .collect { println(it) }
+    // 1-A, 1-B, 2-A, 2-B, 3-A, 3-B
+
+    // flatMapMerge — concurrent inner flows
+    (1..3).asFlow()
+        .flatMapMerge { value ->
+            flow {
+                delay((4 - value) * 100L) // Different delays
+                emit(value)
+            }
+        }
+        .collect { println(it) }
+    // 3, 2, 1 (order not guaranteed)
+
+    // flatMapLatest — cancel previous if new arrives
+    (1..3).asFlow()
+        .onEach { delay(100) }
+        .flatMapLatest { value ->
+            flow {
+                emit("$value: start")
+                delay(300) // Takes longer than outer delay
+                emit("$value: end") // Often cancelled
+            }
+        }
+        .collect { println(it) }
+
+    // zip — combine two flows element by element
+    val names  = flowOf("Alice", "Bob", "Charlie")
+    val scores = flowOf(95, 87, 92)
+    names.zip(scores) { name, score -> "$name: $score" }
+        .collect { println(it) }
+    // Alice: 95, Bob: 87, Charlie: 92
+
+    // combine — emit whenever ANY flow emits
+    val flow1 = MutableStateFlow(0)
+    val flow2 = MutableStateFlow(0)
+    combine(flow1, flow2) { a, b -> "a=$a, b=$b" }
+        .take(3)
+        .collect { println(it) }
+}
+```
+
+### 14.5 Flow Exception Handling
+
+```kotlin
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.*
+
+fun riskyFlow(): Flow<Int> = flow {
+    emit(1)
+    emit(2)
+    throw IOException("Network error!")
+    emit(3) // Never reached
+}
+
+fun main() = runBlocking {
+
+    // catch operator — handles exceptions in upstream flow
+    riskyFlow()
+        .catch { e -> emit(-1) } // Emit fallback value on error
+        .collect { println(it) } // 1, 2, -1
+
+    // retry — retry on failure
+    riskyFlow()
+        .retry(3) { e -> e is IOException } // Retry up to 3 times for IOException
+        .catch { e -> println("Final failure: $e") }
+        .collect { println(it) }
+
+    // retryWhen — retry with custom logic
+    riskyFlow()
+        .retryWhen { cause, attempt ->
+            if (cause is IOException && attempt < 3) {
+                delay(1000L * attempt) // Exponential backoff
+                true // Retry
+            } else {
+                false // Don't retry
+            }
+        }
+        .catch { e -> println("Gave up: $e") }
+        .collect { println(it) }
+}
+```
+
+---
+
+## 15. StateFlow & SharedFlow
+
+### 15.1 StateFlow — Latest-Value Holder
+
+`StateFlow` is a hot flow that always holds the **latest value** and emits it to new collectors immediately.
+
+```kotlin
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.*
+
+class CounterViewModel : ViewModel() {
+
+    // MutableStateFlow has an initial value
+    private val _count = MutableStateFlow(0)
+    val count: StateFlow<Int> = _count.asStateFlow() // Read-only exposure
+
+    fun increment() {
+        _count.value++
+        // or: _count.update { it + 1 } (thread-safe)
+    }
+
+    fun decrement() {
+        _count.update { currentValue -> maxOf(0, currentValue - 1) }
+    }
+
+    fun reset() {
+        _count.value = 0
+    }
+}
+
+// In Fragment:
+viewLifecycleOwner.lifecycleScope.launch {
+    viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.count.collect { count ->
+            binding.countTextView.text = count.toString()
+        }
+    }
+}
+```
+
+### 15.2 SharedFlow — Multi-Subscriber Events
+
+`SharedFlow` is a hot flow for **one-time events** (snackbar, navigation, dialog).
+
+```kotlin
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.*
+
+class LoginViewModel : ViewModel() {
+
+    // SharedFlow for one-time events (no initial value, no replay by default)
+    private val _events = MutableSharedFlow<LoginEvent>()
+    val events: SharedFlow<LoginEvent> = _events.asSharedFlow()
+
+    fun login(email: String, password: String) {
+        viewModelScope.launch {
+            try {
+                val user = withContext(Dispatchers.IO) {
+                    authRepository.login(email, password)
+                }
+                _events.emit(LoginEvent.Success(user))
+            } catch (e: InvalidCredentialsException) {
+                _events.emit(LoginEvent.InvalidCredentials)
+            } catch (e: Exception) {
+                _events.emit(LoginEvent.Error(e.message ?: "Login failed"))
+            }
+        }
+    }
+}
+
+sealed class LoginEvent {
+    data class Success(val user: User) : LoginEvent()
+    object InvalidCredentials : LoginEvent()
+    data class Error(val message: String) : LoginEvent()
+}
+
+// In Activity:
+viewLifecycleOwner.lifecycleScope.launch {
+    viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is LoginEvent.Success            -> navigateToHome(event.user)
+                is LoginEvent.InvalidCredentials -> showSnackbar("Invalid email or password")
+                is LoginEvent.Error              -> showSnackbar(event.message)
+            }
+        }
+    }
+}
+```
+
+### StateFlow vs SharedFlow Comparison
+
+| Feature | StateFlow | SharedFlow |
+|---|---|---|
+| Initial value | Required | Not required |
+| Replay count | 1 (latest) | Configurable (0–N) |
+| Default use case | UI state | One-time events |
+| New subscriber gets | Latest value immediately | Nothing (unless replay > 0) |
+| Duplicate values | Skipped (distinct until changed) | All values emitted |
+| Thread-safe | Yes | Yes |
+
+---
+
+## 16. Coroutines with Room Database
+
+### Step 1 — Define Entity & DAO
+
+```kotlin
+import androidx.room.*
+import kotlinx.coroutines.flow.Flow
+
+@Entity(tableName = "users")
+data class UserEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    @ColumnInfo(name = "name")  val name: String,
+    @ColumnInfo(name = "email") val email: String
+)
+
+@Dao
+interface UserDao {
+
+    // suspend functions for one-shot operations
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertUser(user: UserEntity): Long
+
+    @Update
+    suspend fun updateUser(user: UserEntity)
+
+    @Delete
+    suspend fun deleteUser(user: UserEntity)
+
+    @Query("SELECT * FROM users WHERE id = :id")
+    suspend fun getUserById(id: Int): UserEntity?
+
+    @Query("SELECT * FROM users")
+    suspend fun getAllUsers(): List<UserEntity>
+
+    // Flow for reactive updates — emits whenever data changes
+    @Query("SELECT * FROM users ORDER BY name ASC")
+    fun getAllUsersFlow(): Flow<List<UserEntity>>
+
+    @Query("SELECT * FROM users WHERE name LIKE '%' || :query || '%'")
+    fun searchUsersFlow(query: String): Flow<List<UserEntity>>
+}
+```
+
+### Step 2 — Database Setup
+
+```kotlin
+import androidx.room.*
+
+@Database(entities = [UserEntity::class], version = 1, exportSchema = false)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun userDao(): UserDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        fun getDatabase(context: Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "app_database"
+                ).build()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
+}
+```
+
+### Step 3 — Repository with Coroutines
+
+```kotlin
+class UserRepository(private val dao: UserDao) {
+
+    // Reactive stream — emits whenever DB changes
+    val allUsers: Flow<List<UserEntity>> = dao.getAllUsersFlow()
+
+    // One-shot coroutine operations
+    suspend fun insert(user: UserEntity): Long = dao.insertUser(user)
+    suspend fun update(user: UserEntity) = dao.updateUser(user)
+    suspend fun delete(user: UserEntity) = dao.deleteUser(user)
+    suspend fun getById(id: Int): UserEntity? = dao.getUserById(id)
+}
+```
+
+### Step 4 — ViewModel with Room
+
+```kotlin
+class UserViewModel(private val repository: UserRepository) : ViewModel() {
+
+    // Directly expose the Flow from Room
+    val allUsers: StateFlow<List<UserEntity>> = repository.allUsers
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    fun insert(name: String, email: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.insert(UserEntity(name = name, email = email))
+            }
+        }
+    }
+
+    fun delete(user: UserEntity) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.delete(user)
+            }
+        }
+    }
+}
+```
+
+---
+
+## 17. Coroutines with Retrofit (Network)
+
+### Step 1 — Define API Interface
+
+```kotlin
+import retrofit2.*
+import retrofit2.http.*
+
+data class Post(val id: Int, val title: String, val body: String, val userId: Int)
+data class CreatePostRequest(val title: String, val body: String, val userId: Int)
+
+interface ApiService {
+
+    // suspend functions work directly with Retrofit
+    @GET("posts")
+    suspend fun getPosts(): List<Post>
+
+    @GET("posts/{id}")
+    suspend fun getPost(@Path("id") id: Int): Post
+
+    @POST("posts")
+    suspend fun createPost(@Body request: CreatePostRequest): Post
+
+    @PUT("posts/{id}")
+    suspend fun updatePost(@Path("id") id: Int, @Body post: Post): Post
+
+    @DELETE("posts/{id}")
+    suspend fun deletePost(@Path("id") id: Int): Response<Unit>
+
+    @GET("users/{userId}/posts")
+    suspend fun getPostsByUser(@Path("userId") userId: Int): List<Post>
+}
+```
+
+### Step 2 — Retrofit Instance
+
+```kotlin
+import okhttp3.*
+import retrofit2.*
+import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
+
+object NetworkModule {
+
+    private val loggingInterceptor = HttpLoggingInterceptor().apply {
+        level = HttpLoggingInterceptor.Level.BODY
+    }
+
+    private val okHttpClient = OkHttpClient.Builder()
+        .addInterceptor(loggingInterceptor)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    val retrofit: Retrofit = Retrofit.Builder()
+        .baseUrl("https://jsonplaceholder.typicode.com/")
+        .client(okHttpClient)
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+
+    val apiService: ApiService = retrofit.create(ApiService::class.java)
+}
+```
+
+### Step 3 — Repository with Retrofit
+
+```kotlin
+class PostRepository(private val api: ApiService) {
+
+    // Use Flow to wrap network calls for reactive UI
+    fun getPosts(): Flow<Resource<List<Post>>> = flow {
+        emit(Resource.Loading)
+        try {
+            val posts = api.getPosts() // Suspend call on IO thread
+            emit(Resource.Success(posts))
+        } catch (e: HttpException) {
+            emit(Resource.Error("Server error: ${e.code()}"))
+        } catch (e: IOException) {
+            emit(Resource.Error("Network error. Check your connection."))
+        }
+    }.flowOn(Dispatchers.IO) // Entire flow runs on IO thread
+
+    suspend fun createPost(title: String, body: String): Resource<Post> {
+        return try {
+            val post = api.createPost(CreatePostRequest(title, body, userId = 1))
+            Resource.Success(post)
+        } catch (e: Exception) {
+            Resource.Error(e.message ?: "Failed to create post")
+        }
+    }
+}
+```
+
+### Step 4 — ViewModel with Network
+
+```kotlin
+class PostViewModel(private val repository: PostRepository) : ViewModel() {
+
+    private val _posts = MutableStateFlow<Resource<List<Post>>>(Resource.Loading)
+    val posts: StateFlow<Resource<List<Post>>> = _posts.asStateFlow()
+
+    init { loadPosts() }
+
+    fun loadPosts() {
+        viewModelScope.launch {
+            repository.getPosts().collect { resource ->
+                _posts.value = resource
+            }
+        }
+    }
+
+    fun createPost(title: String, body: String) {
+        viewModelScope.launch {
+            val result = repository.createPost(title, body)
+            if (result is Resource.Success) {
+                // Add to current list
+                val current = (_posts.value as? Resource.Success)?.data ?: emptyList()
+                _posts.value = Resource.Success(current + result.data)
+            }
+        }
+    }
+}
+```
+
+### Step 5 — Observe in Fragment
+
+```kotlin
+class PostsFragment : Fragment() {
+
+    private val viewModel: PostViewModel by viewModels()
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.posts.collect { resource ->
+                    when (resource) {
+                        is Resource.Loading -> {
+                            binding.progressBar.isVisible = true
+                            binding.recyclerView.isVisible = false
+                        }
+                        is Resource.Success -> {
+                            binding.progressBar.isVisible = false
+                            binding.recyclerView.isVisible = true
+                            adapter.submitList(resource.data)
+                        }
+                        is Resource.Error -> {
+                            binding.progressBar.isVisible = false
+                            showSnackbar(resource.message)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 18. Coroutines with WorkManager
+
+WorkManager is for **guaranteed background work** that must survive app restarts.
+
+### CoroutineWorker
+
+```kotlin
+import androidx.work.*
+import kotlinx.coroutines.*
+
+class SyncDataWorker(
+    context: Context,
+    workerParams: WorkerParameters
+) : CoroutineWorker(context, workerParams) {
+
+    override suspend fun doWork(): Result {
+        return try {
+            // Runs on Dispatchers.Default by default
+            // Use withContext(Dispatchers.IO) for I/O work
+            withContext(Dispatchers.IO) {
+                syncDataWithServer()
+            }
+            Result.success()
+        } catch (e: Exception) {
+            if (runAttemptCount < 3) {
+                Result.retry() // Retry up to 3 times
+            } else {
+                Result.failure(
+                    workDataOf("error" to e.message)
+                )
+            }
+        }
+    }
+
+    private suspend fun syncDataWithServer() {
+        // Do your actual sync work here
+        delay(2000L) // Simulated work
+        println("Data synced successfully")
+    }
+}
+```
+
+### Scheduling Work
+
+```kotlin
+// One-time work
+val syncRequest = OneTimeWorkRequestBuilder<SyncDataWorker>()
+    .setConstraints(
+        Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
+            .build()
+    )
+    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
+    .addTag("sync_work")
+    .build()
+
+// Periodic work (minimum 15 minutes interval)
+val periodicSyncRequest = PeriodicWorkRequestBuilder<SyncDataWorker>(
+    repeatInterval = 1,
+    repeatIntervalTimeUnit = TimeUnit.HOURS
+)
+    .setConstraints(
+        Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+    )
+    .build()
+
+// Enqueue
+WorkManager.getInstance(context).enqueueUniqueWork(
+    "data_sync",
+    ExistingWorkPolicy.KEEP,
+    syncRequest
+)
+
+WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+    "periodic_sync",
+    ExistingPeriodicWorkPolicy.KEEP,
+    periodicSyncRequest
+)
+```
+
+### Observing Work Status
+
+```kotlin
+class SyncViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val workManager = WorkManager.getInstance(application)
+
+    // Observe as Flow
+    val syncStatus: Flow<WorkInfo?> = workManager
+        .getWorkInfosByTagFlow("sync_work")
+        .map { workInfoList -> workInfoList.firstOrNull() }
+
+    fun startSync() {
+        val request = OneTimeWorkRequestBuilder<SyncDataWorker>()
+            .addTag("sync_work")
+            .build()
+        workManager.enqueue(request)
+    }
+}
+
+// In Fragment:
+viewModel.syncStatus.collect { workInfo ->
+    when (workInfo?.state) {
+        WorkInfo.State.RUNNING    -> showProgress("Syncing...")
+        WorkInfo.State.SUCCEEDED  -> showSuccess("Sync complete!")
+        WorkInfo.State.FAILED     -> showError("Sync failed")
+        else -> Unit
+    }
+}
+```
+
+---
+
+## 19. Channels
+
+Channels are a **communication pipe** between coroutines — like a queue that both suspends on full and on empty.
+
+### 19.1 Basic Channel
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+fun main() = runBlocking {
+    val channel = Channel<Int>()
+
+    // Producer coroutine
+    launch {
+        for (i in 1..5) {
+            println("Sending $i")
+            channel.send(i) // Suspends if channel is full
+        }
+        channel.close()     // Signal: no more items
+    }
+
+    // Consumer coroutine
+    launch {
+        for (item in channel) { // Iterates until channel is closed
+            println("Received $item")
+            delay(200)
+        }
+    }
+}
+```
+
+### 19.2 Channel Types
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+fun main() = runBlocking {
+
+    // RENDEZVOUS (default) — no buffer, send suspends until receive
+    val rendezvous = Channel<Int>()
+
+    // BUFFERED — fixed buffer, send suspends only when buffer full
+    val buffered = Channel<Int>(capacity = 64)
+
+    // UNLIMITED — never suspends on send (use with caution!)
+    val unlimited = Channel<Int>(Channel.UNLIMITED)
+
+    // CONFLATED — only keeps the latest value (like StateFlow)
+    val conflated = Channel<Int>(Channel.CONFLATED)
+}
+```
+
+### 19.3 `produce` Builder
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+@OptIn(ExperimentalCoroutinesApi::class)
+fun CoroutineScope.produceNumbers(max: Int): ReceiveChannel<Int> = produce {
+    for (i in 1..max) {
+        delay(200)
+        send(i)
+    }
+}
+
+fun main() = runBlocking {
+    val numbers = produceNumbers(5)
+    for (num in numbers) {
+        println("Received: $num")
+    }
+}
+```
+
+### 19.4 Fan-Out (One Producer, Many Consumers)
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+fun main() = runBlocking {
+    val channel = Channel<Int>(10)
+
+    // One producer
+    launch {
+        for (i in 1..10) {
+            channel.send(i)
+        }
+        channel.close()
+    }
+
+    // Multiple consumers
+    repeat(3) { consumerId ->
+        launch {
+            for (item in channel) {
+                println("Consumer $consumerId got: $item")
+                delay(100)
+            }
+        }
+    }
+
+    delay(2000)
+}
+```
+
+### 19.5 Fan-In (Many Producers, One Consumer)
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.*
+
+fun main() = runBlocking {
+    val mergedChannel = Channel<String>(10)
+
+    // Multiple producers
+    launch { mergedChannel.send("From Producer 1"); delay(100); mergedChannel.send("From Producer 1 again") }
+    launch { mergedChannel.send("From Producer 2"); delay(200); mergedChannel.send("From Producer 2 again") }
+
+    // One consumer reads from both
+    launch {
+        repeat(4) {
+            println(mergedChannel.receive())
+        }
+    }
+
+    delay(500)
+}
+```
+
+---
+
+## 20. Coroutine Context & CoroutineScope
+
+### CoroutineContext = Dispatcher + Job + Name + ExceptionHandler
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking {
+
+    // Inspect the current context
+    println("Current context: $coroutineContext")
+    println("Current Job: ${coroutineContext[Job]}")
+    println("Current Dispatcher: ${coroutineContext[ContinuationInterceptor]}")
+
+    // Create a scope with a custom context
+    val myContext = Dispatchers.IO +
+            CoroutineName("MyCoroutine") +
+            CoroutineExceptionHandler { _, e -> println("Error: $e") }
+
+    val scope = CoroutineScope(myContext)
+
+    scope.launch {
+        println("Running in: ${coroutineContext[CoroutineName]}")
+        // Prints: Running in: CoroutineName(MyCoroutine)
+    }.join()
+
+    scope.cancel()
+}
+```
+
+### Context Inheritance
+
+```kotlin
+import kotlinx.coroutines.*
+
+fun main() = runBlocking(CoroutineName("Parent")) {
+
+    // Children inherit parent's context
+    launch {
+        println("Child: ${coroutineContext[CoroutineName]}") // Parent
+
+        // But can override
+        launch(CoroutineName("GrandChild")) {
+            println("GrandChild: ${coroutineContext[CoroutineName]}") // GrandChild
+        }
+    }
+}
+```
+
+### `+` Operator to Combine Contexts
+
+```kotlin
+import kotlinx.coroutines.*
+
+val context = Dispatchers.IO +
+    SupervisorJob() +
+    CoroutineName("BackgroundWorker") +
+    CoroutineExceptionHandler { _, throwable ->
+        Log.e("Coroutine", "Uncaught exception", throwable)
+    }
+
+val scope = CoroutineScope(context)
+```
+
+---
+
+## 21. withContext — Thread Switching
+
+`withContext` is the primary way to **switch threads** in Android development.
+
+```kotlin
+import kotlinx.coroutines.*
+
+class ImageProcessor {
+
+    // Orchestration runs on Main, switches threads as needed
+    suspend fun processAndDisplayImage(uri: Uri): Bitmap = withContext(Dispatchers.Main) {
+
+        // Step 1: Load from disk (IO)
+        val rawBitmap: Bitmap = withContext(Dispatchers.IO) {
+            BitmapFactory.decodeStream(contentResolver.openInputStream(uri))
+        }
+
+        // Step 2: Apply filters (CPU intensive)
+        val processedBitmap: Bitmap = withContext(Dispatchers.Default) {
+            applyFilters(rawBitmap)
+        }
+
+        // Step 3: Update UI (back on Main — automatic after withContext)
+        imageView.setImageBitmap(processedBitmap)
+        processedBitmap
+    }
+
+    private fun applyFilters(bitmap: Bitmap): Bitmap {
+        // Heavy image processing...
+        return bitmap
+    }
+}
+```
+
+### withContext vs launch for Thread Switching
+
+```kotlin
+// withContext — returns a result, sequential
+val result: String = withContext(Dispatchers.IO) {
+    fetchFromNetwork() // Must finish before moving on
+}
+println(result)
+
+// launch — fire and forget, does NOT return a value
+launch(Dispatchers.IO) {
+    saveToDatabase() // Runs concurrently
+}
+println("Database save started in background")
+```
+
+---
+
+## 22. Parallel Decomposition
+
+### Running Tasks in Parallel with `async`
+
+```kotlin
+import kotlinx.coroutines.*
+
+data class UserProfile(
+    val user: User,
+    val posts: List<Post>,
+    val followers: List<User>
+)
+
+suspend fun loadUserProfile(userId: Int): UserProfile = coroutineScope {
+
+    // All three start SIMULTANEOUSLY
+    val userDeferred      = async(Dispatchers.IO) { api.getUser(userId) }
+    val postsDeferred     = async(Dispatchers.IO) { api.getPosts(userId) }
+    val followersDeferred = async(Dispatchers.IO) { api.getFollowers(userId) }
+
+    // Await all results — total time = max(user, posts, followers) NOT sum
+    UserProfile(
+        user      = userDeferred.await(),
+        posts     = postsDeferred.await(),
+        followers = followersDeferred.await()
+    )
+}
+```
+
+### `awaitAll()` for Dynamic Lists
+
+```kotlin
+import kotlinx.coroutines.*
+
+suspend fun loadMultipleUsers(ids: List<Int>): List<User> = coroutineScope {
+    ids.map { id ->
+        async(Dispatchers.IO) { api.getUser(id) }
+    }.awaitAll() // Waits for all, throws if ANY fails
+}
+
+// More resilient version
+suspend fun loadUsersResiliently(ids: List<Int>): List<Result<User>> = coroutineScope {
+    ids.map { id ->
+        async(Dispatchers.IO) {
+            runCatching { api.getUser(id) }
+        }
+    }.awaitAll()
+}
+```
+
+### Measuring Sequential vs Parallel
+
+```kotlin
+import kotlinx.coroutines.*
+import kotlin.system.measureTimeMillis
+
+suspend fun sequential() {
+    val time = measureTimeMillis {
+        val a = fetchDataA() // 1000ms
+        val b = fetchDataB() // 1000ms
+        println("$a, $b")
+    }
+    println("Sequential: ${time}ms") // ~2000ms
+}
+
+suspend fun parallel() = coroutineScope {
+    val time = measureTimeMillis {
+        val a = async { fetchDataA() } // 1000ms
+        val b = async { fetchDataB() } // 1000ms — starts immediately
+        println("${a.await()}, ${b.await()}")
+    }
+    println("Parallel: ${time}ms") // ~1000ms
+}
+
+suspend fun fetchDataA() = withContext(Dispatchers.IO) { delay(1000L); "A" }
+suspend fun fetchDataB() = withContext(Dispatchers.IO) { delay(1000L); "B" }
+```
+
+---
+
+## 23. Coroutines in Fragments & Activities
+
+### Activity — Best Practices
+
+```kotlin
+class MainActivity : AppCompatActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
+    private lateinit var binding: ActivityMainBinding
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        // Collect UI state — use repeatOnLifecycle for safety
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+
+                // Multiple flows collected simultaneously
+                launch {
+                    viewModel.uiState.collect { state ->
+                        renderState(state)
+                    }
+                }
+                launch {
+                    viewModel.events.collect { event ->
+                        handleEvent(event)
+                    }
+                }
+            }
+        }
+
+        // Setup click listeners
+        binding.loadButton.setOnClickListener {
+            viewModel.loadData()
+        }
+    }
+
+    private fun renderState(state: UiState) { /* update UI */ }
+    private fun handleEvent(event: UiEvent) { /* handle one-time events */ }
+}
+```
+
+### Fragment — Best Practices
+
+```kotlin
+class ProfileFragment : Fragment(R.layout.fragment_profile) {
+
+    private val viewModel: ProfileViewModel by viewModels()
+    private var _binding: FragmentProfileBinding? = null
+    private val binding get() = _binding!!
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        _binding = FragmentProfileBinding.bind(view)
+
+        setupObservers()
+        setupActions()
+    }
+
+    private fun setupObservers() {
+        // Use viewLifecycleOwner, NOT 'this', to avoid memory leaks
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.profile.collect { profile ->
+                    binding.nameText.text = profile?.name ?: ""
+                }
+            }
+        }
+    }
+
+    private fun setupActions() {
+        binding.editButton.setOnClickListener {
+            // Short one-off coroutine for click handling
+            viewLifecycleOwner.lifecycleScope.launch {
+                val result = viewModel.updateProfile(/* ... */)
+                if (result.isSuccess) showSnackbar("Profile updated!")
+            }
+        }
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null // Prevent memory leaks
+    }
+}
+```
+
+---
+
+## 24. Coroutines with Dependency Injection (Hilt)
+
+### Setup Hilt Coroutine Modules
+
+```kotlin
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.*
+import javax.inject.Qualifier
+import javax.inject.Singleton
+
+// Custom qualifier annotations for different dispatchers
+@Retention(AnnotationRetention.BINARY)
+@Qualifier
+annotation class IoDispatcher
+
+@Retention(AnnotationRetention.BINARY)
+@Qualifier
+annotation class DefaultDispatcher
+
+@Retention(AnnotationRetention.BINARY)
+@Qualifier
+annotation class MainDispatcher
+
+@Module
+@InstallIn(SingletonComponent::class)
+object CoroutineModule {
+
+    @IoDispatcher
+    @Provides
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    @DefaultDispatcher
+    @Provides
+    fun provideDefaultDispatcher(): CoroutineDispatcher = Dispatchers.Default
+
+    @MainDispatcher
+    @Provides
+    fun provideMainDispatcher(): CoroutineDispatcher = Dispatchers.Main
+
+    @Singleton
+    @Provides
+    fun provideApplicationScope(
+        @DefaultDispatcher defaultDispatcher: CoroutineDispatcher
+    ): CoroutineScope = CoroutineScope(SupervisorJob() + defaultDispatcher)
+}
+```
+
+### Injecting Dispatchers into Repository
+
+```kotlin
+import javax.inject.Inject
+
+class UserRepository @Inject constructor(
+    private val api: ApiService,
+    private val dao: UserDao,
+    @IoDispatcher private val ioDispatcher: CoroutineDispatcher
+) {
+    suspend fun getUser(id: Int): User = withContext(ioDispatcher) {
+        val local = dao.getUserById(id)
+        if (local != null) return@withContext local.toDomain()
+
+        val remote = api.getUser(id)
+        dao.insertUser(remote.toEntity())
+        remote
+    }
+
+    fun getUsersStream(): Flow<List<User>> = dao
+        .getAllUsersFlow()
+        .map { list -> list.map { it.toDomain() } }
+        .flowOn(ioDispatcher)
+}
+```
+
+### Hilt ViewModel
+
+```kotlin
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+
+@HiltViewModel
+class UserViewModel @Inject constructor(
+    private val repository: UserRepository
+) : ViewModel() {
+
+    val users: StateFlow<List<User>> = repository.getUsersStream()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = emptyList()
+        )
+}
+```
+
+---
+
+## 25. Repository Pattern with Coroutines
+
+### Full Repository with Offline-First Strategy
+
+```kotlin
+class NewsRepository @Inject constructor(
+    private val api: NewsApiService,
+    private val dao: NewsDao,
+    @IoDispatcher private val ioDispatcher: CoroutineDispatcher
+) {
+
+    // Offline-first: emit cached data first, then refresh from network
+    fun getNewsArticles(): Flow<Resource<List<Article>>> = flow {
+        // 1. Emit cached data immediately
+        val cachedArticles = dao.getAllArticles().first()
+        if (cachedArticles.isNotEmpty()) {
+            emit(Resource.Success(cachedArticles.map { it.toDomain() }))
+        } else {
+            emit(Resource.Loading)
+        }
+
+        // 2. Fetch fresh data from network
+        try {
+            val freshArticles = api.getArticles()
+            dao.deleteAll()
+            dao.insertAll(freshArticles.map { it.toEntity() })
+            // 3. Room will automatically emit the new data via Flow
+        } catch (e: Exception) {
+            if (cachedArticles.isEmpty()) {
+                emit(Resource.Error("No internet connection and no cached data"))
+            }
+            // If we have cache, silently fail (user already sees data)
+        }
+    }
+    .flowOn(ioDispatcher)
+    .catch { e -> emit(Resource.Error(e.message ?: "Unknown error")) }
+
+    // Combine local DB flow with periodic refresh
+    fun getNewsWithAutoRefresh(): Flow<List<Article>> {
+        return dao.getAllArticlesFlow()
+            .map { entities -> entities.map { it.toDomain() } }
+            .onStart { refreshNews() } // Refresh when collection starts
+            .flowOn(ioDispatcher)
+    }
+
+    private suspend fun refreshNews() {
+        try {
+            val articles = api.getArticles()
+            dao.deleteAll()
+            dao.insertAll(articles.map { it.toEntity() })
+        } catch (e: Exception) {
+            // Silently fail — cached data will still be shown
+        }
+    }
+}
+```
+
+---
+
+## 26. Unit Testing Coroutines
+
+### Setup
+
+```kotlin
+// build.gradle.kts
+testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+testImplementation("io.mockk:mockk:1.13.8")
+testImplementation("androidx.arch.core:core-testing:2.2.0")
+testImplementation("app.cash.turbine:turbine:1.0.0") // For Flow testing
+```
+
+### Testing suspend Functions
+
+```kotlin
+import kotlinx.coroutines.test.*
+import org.junit.*
+
+class UserRepositoryTest {
+
+    private lateinit var repository: UserRepository
+    private val mockApi = mockk<ApiService>()
+    private val mockDao = mockk<UserDao>()
+
+    @Before
+    fun setUp() {
+        repository = UserRepository(mockApi, mockDao, Dispatchers.IO)
+    }
+
+    @Test
+    fun `getUser returns user from API when not in cache`() = runTest {
+        // Given
+        coEvery { mockDao.getUserById(1) } returns null
+        coEvery { mockApi.getUser(1) } returns User(1, "Alice", "alice@test.com")
+        coEvery { mockDao.insertUser(any()) } returns 1L
+
+        // When
+        val result = repository.getUser(1)
+
+        // Then
+        assertEquals("Alice", result.name)
+        coVerify { mockApi.getUser(1) }
+        coVerify { mockDao.insertUser(any()) }
+    }
+}
+```
+
+### Testing ViewModel with StateFlow
+
+```kotlin
+import app.cash.turbine.*
+import kotlinx.coroutines.test.*
+
+class UserViewModelTest {
+
+    @get:Rule
+    val instantTaskExecutorRule = InstantTaskExecutorRule()
+
+    private val testDispatcher = UnconfinedTestDispatcher()
+    private val mockRepository = mockk<UserRepository>()
+    private lateinit var viewModel: UserViewModel
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+        every { mockRepository.getUsersStream() } returns flowOf(
+            listOf(User(1, "Alice", "alice@test.com"))
+        )
+        viewModel = UserViewModel(mockRepository)
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `users StateFlow emits user list`() = runTest {
+        viewModel.users.test {
+            val users = awaitItem()
+            assertEquals(1, users.size)
+            assertEquals("Alice", users[0].name)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+}
+```
+
+### Testing Flow with Turbine
+
+```kotlin
+import app.cash.turbine.*
+
+class NewsRepositoryTest {
+
+    @Test
+    fun `getNewsArticles emits loading then success`() = runTest {
+        // Given
+        coEvery { mockApi.getArticles() } returns listOf(/* articles */)
+        every { mockDao.getAllArticles() } returns flowOf(emptyList())
+
+        // When/Then
+        repository.getNewsArticles().test {
+            assertEquals(Resource.Loading, awaitItem())
+            val success = awaitItem() as Resource.Success
+            assertNotNull(success.data)
+            awaitComplete()
+        }
+    }
+
+    @Test
+    fun `getNewsArticles emits error on network failure`() = runTest {
+        coEvery { mockApi.getArticles() } throws IOException("No connection")
+        every { mockDao.getAllArticles() } returns flowOf(emptyList())
+
+        repository.getNewsArticles().test {
+            awaitItem() // Loading
+            val error = awaitItem() as Resource.Error
+            assertNotNull(error.message)
+            awaitComplete()
+        }
+    }
+}
+```
+
+### Using `advanceTimeBy` for Testing Delays
+
+```kotlin
+@Test
+fun `debounce search waits 500ms`() = runTest {
+    val results = mutableListOf<String>()
+
+    viewModel.searchResults
+        .onEach { results.add(it) }
+        .launchIn(this)
+
+    viewModel.onSearchQueryChanged("a")
+    viewModel.onSearchQueryChanged("an")
+    viewModel.onSearchQueryChanged("and")
+
+    // Fast-forward time by 500ms to trigger debounce
+    advanceTimeBy(500)
+
+    // Only one search should have been triggered
+    assertEquals(1, results.size)
+}
+```
+
+---
+
+## 27. Common Anti-Patterns & Pitfalls
+
+### ❌ Pitfall 1: Blocking the Main Thread
+
+```kotlin
+// ❌ BAD — Thread.sleep blocks the UI thread!
+fun loadData() {
+    Thread.sleep(3000)
+    textView.text = "Done"
+}
+
+// ✅ GOOD
+fun loadData() {
+    lifecycleScope.launch {
+        delay(3000)           // Non-blocking
+        textView.text = "Done"
+    }
+}
+```
+
+### ❌ Pitfall 2: Using GlobalScope
+
+```kotlin
+// ❌ BAD — coroutine lives forever, even after screen is gone
+fun load() {
+    GlobalScope.launch {
+        val data = fetchData()
+        textView.text = data // textView may be destroyed!
+    }
+}
+
+// ✅ GOOD — cancelled with ViewModel lifecycle
+fun load() {
+    viewModelScope.launch {
+        val data = fetchData()
+        _data.value = data
+    }
+}
+```
+
+### ❌ Pitfall 3: Swallowing CancellationException
+
+```kotlin
+// ❌ BAD — CancellationException is caught and swallowed
+launch {
+    try {
+        delay(1000)
+    } catch (e: Exception) { // catches ALL exceptions including CancellationException
+        Log.e("TAG", "Error")
+    }
+}
+
+// ✅ GOOD — only catch what you can handle
+launch {
+    try {
+        delay(1000)
+    } catch (e: IOException) {
+        Log.e("TAG", "Network error")
+    }
+    // Or: catch Exception but re-throw CancellationException
+    try {
+        delay(1000)
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e // Re-throw!
+        Log.e("TAG", "Other error")
+    }
+}
+```
+
+### ❌ Pitfall 4: launch inside launch (Escaping Structured Concurrency)
+
+```kotlin
+// ❌ BAD — inner launch escapes the outer scope
+suspend fun loadData() = coroutineScope {
+    launch {
+        launch(GlobalScope.coroutineContext) { // ← Escapes structured concurrency!
+            fetchData()
+        }
+    }
+}
+
+// ✅ GOOD — keep coroutines within their scope
+suspend fun loadData() = coroutineScope {
+    launch {
+        launch {
+            fetchData() // ← properly nested
+        }
+    }
+}
+```
+
+### ❌ Pitfall 5: Not Switching to IO Dispatcher for Blocking Calls
+
+```kotlin
+// ❌ BAD — blocking IO on Dispatchers.Main freezes UI
+class MyViewModel : ViewModel() {
+    fun loadUser() {
+        viewModelScope.launch { // Default: Dispatchers.Main
+            val user = database.getUser(1) // ← Blocking call on Main!
+            _user.value = user
+        }
+    }
+}
+
+// ✅ GOOD
+class MyViewModel : ViewModel() {
+    fun loadUser() {
+        viewModelScope.launch {
+            val user = withContext(Dispatchers.IO) { // ← Switch for blocking work
+                database.getUser(1)
+            }
+            _user.value = user // ← Back on Main
+        }
+    }
+}
+```
+
+### ❌ Pitfall 6: Collecting Flow in Fragment without repeatOnLifecycle
+
+```kotlin
+// ❌ BAD — continues collecting even when Fragment is in background
+override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+    lifecycleScope.launch {
+        viewModel.data.collect { render(it) } // Never stops!
+    }
+}
+
+// ✅ GOOD — automatically pauses/resumes with lifecycle
+override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+    viewLifecycleOwner.lifecycleScope.launch {
+        viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.data.collect { render(it) } // Pauses when STOPPED
+        }
+    }
+}
+```
+
+### ❌ Pitfall 7: Making async Lazy by Accident
+
+```kotlin
+// ❌ This is SEQUENTIAL — awaits each one before starting next
+val a = async { fetchA() }.await()
+val b = async { fetchB() }.await()
+
+// ✅ This is PARALLEL — starts both, then awaits
+val deferredA = async { fetchA() }
+val deferredB = async { fetchB() }
+val a = deferredA.await()
+val b = deferredB.await()
+```
+
+---
+
+## 28. Performance Best Practices
+
+### 1. Use `stateIn` for Expensive Flows
+
+```kotlin
+// Without stateIn — subscribes to DB every time UI rotates
+val users: Flow<List<User>> = repository.getUsersFlow()
+
+// ✅ With stateIn — single subscription, survives rotation
+val users: StateFlow<List<User>> = repository.getUsersFlow()
+    .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000L), // keeps active 5s after last subscriber
+        initialValue = emptyList()
+    )
+```
+
+### 2. Use `debounce` for Search / Input
+
+```kotlin
+class SearchViewModel : ViewModel() {
+
+    private val _query = MutableStateFlow("")
+
+    val searchResults: StateFlow<List<Product>> = _query
+        .debounce(500L)           // Wait 500ms after last keystroke
+        .filter { it.length > 2 } // Only search for 3+ chars
+        .distinctUntilChanged()   // Don't search same query twice
+        .flatMapLatest { query -> // Cancel previous search if new query comes
+            repository.search(query)
+        }
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+    fun onQueryChanged(query: String) {
+        _query.value = query
+    }
+}
+```
+
+### 3. `flowOn` to Offload Flow to Background Thread
+
+```kotlin
+// ✅ Use flowOn to run upstream flow on IO thread
+fun getExpensiveData(): Flow<List<Data>> = flow {
+    val data = database.loadAll() // Heavy DB query
+    emit(data)
+}
+.map { list -> list.filter { it.isActive } } // Also on IO
+.flowOn(Dispatchers.IO) // Everything above this runs on IO
+// Collectors always get items on their original dispatcher
+```
+
+### 4. `conflate()` to Skip Stale Values
+
+```kotlin
+// If processor is slower than producer, skip old values
+fastProducingFlow
+    .conflate()  // Drop intermediate values, always process latest
+    .collect { value ->
+        delay(500) // Slow processing
+        render(value) // Only latest value is rendered
+    }
+```
+
+### 5. Use `distinctUntilChanged()`
+
+```kotlin
+// Don't re-render if value hasn't changed
+viewModel.userName
+    .distinctUntilChanged() // Skip duplicate emissions
+    .collect { name -> binding.nameText.text = name }
+```
+
+---
+
+## 29. Complete Real-World Example App
+
+A mini **News App** combining all the concepts:
+
+### Data Layer
+
+```kotlin
+// Entity
+@Entity(tableName = "articles")
+data class ArticleEntity(
+    @PrimaryKey val url: String,
+    val title: String,
+    val description: String?,
+    val publishedAt: String
+)
+
+// DAO
+@Dao
+interface ArticleDao {
+    @Query("SELECT * FROM articles ORDER BY publishedAt DESC")
+    fun getAllArticlesFlow(): Flow<List<ArticleEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(articles: List<ArticleEntity>)
+
+    @Query("DELETE FROM articles")
+    suspend fun deleteAll()
+}
+
+// API
+interface NewsApi {
+    @GET("top-headlines")
+    suspend fun getTopHeadlines(
+        @Query("country") country: String = "us",
+        @Query("apiKey") apiKey: String = BuildConfig.NEWS_API_KEY
+    ): NewsResponse
+}
+
+data class NewsResponse(val articles: List<ArticleDto>)
+data class ArticleDto(val url: String, val title: String, val description: String?, val publishedAt: String)
+```
+
+### Domain & Repository Layer
+
+```kotlin
+// Domain model
+data class Article(val url: String, val title: String, val description: String, val publishedAt: String)
+
+// Mappers
+fun ArticleEntity.toDomain() = Article(url, title, description ?: "", publishedAt)
+fun ArticleDto.toEntity() = ArticleEntity(url, title, description, publishedAt)
+
+// Repository
+class NewsRepository @Inject constructor(
+    private val api: NewsApi,
+    private val dao: ArticleDao,
+    @IoDispatcher private val ioDispatcher: CoroutineDispatcher
+) {
+    val articles: Flow<List<Article>> = dao
+        .getAllArticlesFlow()
+        .map { entities -> entities.map { it.toDomain() } }
+        .flowOn(ioDispatcher)
+
+    suspend fun refreshArticles(): Result<Unit> = withContext(ioDispatcher) {
+        runCatching {
+            val response = api.getTopHeadlines()
+            dao.deleteAll()
+            dao.insertAll(response.articles.map { it.toEntity() })
+        }
+    }
+}
+```
+
+### ViewModel Layer
+
+```kotlin
+sealed class NewsUiState {
+    object Loading : NewsUiState()
+    data class Success(val articles: List<Article>) : NewsUiState()
+    data class Error(val message: String) : NewsUiState()
+}
+
+@HiltViewModel
+class NewsViewModel @Inject constructor(
+    private val repository: NewsRepository
+) : ViewModel() {
+
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private val _snackbarMessage = MutableSharedFlow<String>()
+    val snackbarMessage: SharedFlow<String> = _snackbarMessage.asSharedFlow()
+
+    val uiState: StateFlow<NewsUiState> = repository.articles
+        .map<List<Article>, NewsUiState> { NewsUiState.Success(it) }
+        .onStart { emit(NewsUiState.Loading) }
+        .catch { emit(NewsUiState.Error(it.message ?: "Unknown error")) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = NewsUiState.Loading
+        )
+
+    init {
+        refresh()
+    }
+
+    fun refresh() {
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            val result = repository.refreshArticles()
+            _isRefreshing.value = false
+            if (result.isFailure) {
+                _snackbarMessage.emit("Failed to refresh. Showing cached news.")
+            }
+        }
+    }
+}
+```
+
+### UI Layer
+
+```kotlin
+@AndroidEntryPoint
+class NewsFragment : Fragment(R.layout.fragment_news) {
+
+    private val viewModel: NewsViewModel by viewModels()
+    private var _binding: FragmentNewsBinding? = null
+    private val binding get() = _binding!!
+    private val adapter = NewsAdapter()
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        _binding = FragmentNewsBinding.bind(view)
+
+        binding.recyclerView.adapter = adapter
+        binding.swipeRefresh.setOnRefreshListener { viewModel.refresh() }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.uiState.collect { state ->
+                        when (state) {
+                            is NewsUiState.Loading -> binding.progressBar.isVisible = true
+                            is NewsUiState.Success -> {
+                                binding.progressBar.isVisible = false
+                                adapter.submitList(state.articles)
+                            }
+                            is NewsUiState.Error -> {
+                                binding.progressBar.isVisible = false
+                                showSnackbar(state.message)
+                            }
+                        }
+                    }
+                }
+                launch {
+                    viewModel.isRefreshing.collect { isRefreshing ->
+                        binding.swipeRefresh.isRefreshing = isRefreshing
+                    }
+                }
+                launch {
+                    viewModel.snackbarMessage.collect { message ->
+                        showSnackbar(message)
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null
+    }
+}
+```
+
+---
+
+## 30. Quick Reference Cheat Sheet
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│           ANDROID COROUTINES CHEAT SHEET                          │
+├────────────────────────┬──────────────────────────────────────────┤
+│ START A COROUTINE      │                                          │
+│  launch { }            │ Fire-and-forget, returns Job             │
+│  async { }             │ Returns result via Deferred<T>           │
+│  withContext(D) { }    │ Switch thread, returns result            │
+│  coroutineScope { }    │ Child scope, waits for all children      │
+│  supervisorScope { }   │ Child scope, isolated failures           │
+├────────────────────────┼──────────────────────────────────────────┤
+│ SCOPES                 │                                          │
+│  viewModelScope        │ ViewModel lifecycle                      │
+│  lifecycleScope        │ Activity/Fragment lifecycle              │
+│  viewLifecycleOwner    │ Fragment VIEW lifecycle                  │
+│  .lifecycleScope       │                                          │
+├────────────────────────┼──────────────────────────────────────────┤
+│ DISPATCHERS            │                                          │
+│  Dispatchers.Main      │ UI updates                               │
+│  Dispatchers.IO        │ Network, DB, file I/O                    │
+│  Dispatchers.Default   │ CPU-intensive work                       │
+├────────────────────────┼──────────────────────────────────────────┤
+│ FLOW                   │                                          │
+│  flow { emit() }       │ Create cold stream                       │
+│  .collect { }          │ Start and consume stream                 │
+│  .map / .filter        │ Transform values                         │
+│  .flowOn(IO)           │ Run upstream on background thread        │
+│  .stateIn(scope)       │ Convert to StateFlow                     │
+│  .catch { }            │ Handle errors in flow                    │
+│  .debounce(500)        │ Wait before emitting                     │
+├────────────────────────┼──────────────────────────────────────────┤
+│ HOT FLOWS              │                                          │
+│  MutableStateFlow(v)   │ State holder, always has value           │
+│  MutableSharedFlow()   │ Event bus, no initial value              │
+├────────────────────────┼──────────────────────────────────────────┤
+│ CANCELLATION           │                                          │
+│  job.cancel()          │ Cancel a coroutine                       │
+│  job.cancelAndJoin()   │ Cancel and wait                          │
+│  isActive              │ Check if coroutine is still active       │
+│  withTimeout(ms) { }   │ Throws on timeout                        │
+│  withTimeoutOrNull { } │ Returns null on timeout                  │
+├────────────────────────┼──────────────────────────────────────────┤
+│ BEST PRACTICES         │                                          │
+│  ✅                    │ Use viewModelScope/lifecycleScope         │
+│  ✅                    │ Switch to IO for blocking calls           │
+│  ✅                    │ Use repeatOnLifecycle in Fragments        │
+│  ✅                    │ Use stateIn for expensive flows           │
+│  ✅                    │ Re-throw CancellationException            │
+│  ❌                    │ Never use GlobalScope                     │
+│  ❌                    │ Never block Main with Thread.sleep        │
+│  ❌                    │ Never swallow CancellationException       │
+└────────────────────────┴──────────────────────────────────────────┘
